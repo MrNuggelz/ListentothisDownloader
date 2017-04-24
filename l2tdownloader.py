@@ -4,16 +4,17 @@ import json
 import os
 import re
 import subprocess
-import taglib
 
 from urllib.error import HTTPError
 
+import eyed3
 import youtube_dl
 import urllib
 from urllib.request import urlopen
 from collections import namedtuple
 
-from youtube_dl.utils import ExtractorError, DownloadError
+from eyed3.id3 import Tag, ID3_V1, ID3_DEFAULT_VERSION
+from youtube_dl.utils import DownloadError
 
 Track = namedtuple('Track', ['url', 'artist', 'title', 'genre', 'year', 'month'])
 comment_url = 'https://www.reddit.com/user/l2tbot/comments.json?limit=1000'
@@ -28,7 +29,6 @@ ydl = youtube_dl.YoutubeDL({
     # 'simulate': True,
     # 'verbose': True,
     'quiet': True,
-    'outtmpl': '%(id)s.%(ext)s',
     'format': 'bestaudio/best',
     'postprocessors': [{
         'key': 'FFmpegExtractAudio',
@@ -45,7 +45,7 @@ def track_from_match(match: re.match, month: str) -> Track:
     if 'year' in info:
         year = info['year']
     if 'genre' in info:
-        genre = [genre.strip() for genre in re.split(',|/',info['genre'])]
+        genre = "\x00".join([genre.strip() for genre in re.split(',|/',info['genre'])])
     return Track(info['url'], info['artist'], info['title'],
                  genre, year, month)
 
@@ -120,12 +120,16 @@ def check_missing_in_dir(month):
 
 
 def song_exists(track):
+    return os.path.exists(get_path(track))
+
+
+def get_path(track):
     month = track.month
     if track is None:
-        return False
+        return ""
     filename = track.artist + ' - ' + track.title + '.mp3'
-    filename = filename.replace('/', '').replace('?', '').replace('\"','\'').replace(':',';').replace('*','')
-    return os.path.exists('songs/' + month + '/' + filename)
+    filename = filename.replace('/', '').replace('?', '').replace('\"', '\'').replace(':', ';').replace('*', '')
+    return 'songs/' + month + '/' + filename
 
 
 def download(track):
@@ -148,23 +152,36 @@ def download(track):
         subprocess.run(cmd)
         if args.verbose:
             print(' finished conversion')
-        album = 'Best of {0!s} 20{1!s} on /r/listentothis'.format(track.month[:-2], track.month[-2:])
-        mp3 = taglib.File('temp.mp3')
-        mp3.tags['ARTIST'] = [track.artist]
-        mp3.tags['TITLE'] = [track.title]
-        mp3.tags['ALBUM'] = [album]
-        if track.year is not None:
-            mp3.tags['DATE'] = [track.year]
-        if track.genre is not None:
-            mp3.tags['GENRE'] = track.genre
-        mp3.save()
-        mp3.close()
-        os.rename('temp.mp3', 'songs/{0!s}/{1!s}.mp3'.format(track.month, filename))
+        filepath = 'songs/{0!s}/{1!s}.mp3'.format(track.month, filename)
+        os.rename('temp.mp3', filepath)
+        if not args.ignore_tags:
+            set_tags(track)
         if args.verbose:
             print('finished:', filename)
         return True
-    except (DownloadError, KeyError,HTTPError):
+    except (DownloadError, KeyError, HTTPError):
         return False
+
+
+def set_tags(track):
+    if args.verbose:
+        print(' tagging', str(track.artist + ' - ' + track.title))
+    album = 'Best of {0!s} 20{1!s} on /r/listentothis'.format(track.month[:-2], track.month[-2:])
+    path = get_path(track)
+    if path is None:
+        return
+    tag = Tag()
+    tag.title = track.title
+    tag.artist = track.artist
+    tag.album_artist = "Various Artists"
+    if track.year is not None:
+        tag.year = track.year
+    tag.album = album
+    tag.genre = track.genre
+    tag.save(filename=path, version=ID3_V1)
+    tag.save(filename=path, version=ID3_DEFAULT_VERSION)
+    if args.verbose:
+        print(' finished tagging')
 
 
 def download_month(month):
@@ -197,13 +214,17 @@ def save_cache(data):
 
 
 if __name__ == '__main__':
+    eyed3.log.setLevel("ERROR")
     parser = argparse.ArgumentParser()
     parser.add_argument('-m', '--month')
     parser.add_argument('-c', '--check', action='store_true')
-    parser.add_argument('-dc', '--disable-cache', action='store_true')
+    parser.add_argument('-cm', '--check-missing', action='store_true')
+    parser.add_argument('-ct', '--check-tags', action='store_true')
+    parser.add_argument('-it', '--ignore-tags', action='store_true')
     parser.add_argument('-v', '--verbose', action='store_true')
     parser.add_argument('-r', '--reload-songs', action='store_true')
-    parser.add_argument('--update-cache', action='store_true')
+    parser.add_argument('-dc', '--disable-cache', action='store_true')
+    parser.add_argument('-uc', '--update-cache', action='store_true')
     args = parser.parse_args()
 
     if args.update_cache:
@@ -211,13 +232,25 @@ if __name__ == '__main__':
             save_cache(get_all_song_lists_from_reddit())
         else:
             get_song_list(args.month)
-    elif args.check:
-        if args.month is None:
-            dirs = [d for d in os.listdir("songs/") if os.path.isdir("songs/" + d)]
-            for d in dirs:
-                check_missing_in_dir(d)
-        else:
-            check_missing_in_dir(args.month)
+    elif args.check or args.check_missing or args.check_tags:
+        if args.check or args.check_missing:
+            if args.month is None:
+                dirs = [d for d in os.listdir("songs/") if os.path.isdir("songs/" + d)]
+                for d in dirs:
+                    check_missing_in_dir(d)
+            else:
+                check_missing_in_dir(args.month)
+        if args.check or args.check_tags:
+            if args.month is None:
+                dirs = [d for d in os.listdir("songs/") if os.path.isdir("songs/" + d)]
+                for d in dirs:
+                    for song in get_song_list(d):
+                        if song_exists(song):
+                            set_tags(song)
+            else:
+                for song in get_song_list(args.month):
+                    if song_exists(song):
+                        set_tags(song)
     elif args.month is None:
         months = get_all_song_lists_from_reddit()
         save_cache(months)
