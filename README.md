@@ -1,5 +1,7 @@
 # ListentothisDownloader
 
+This script was made for downloading the monthly TOP 50 lists from /r/listentothis posted and set the ID3 tags.
+
 ## Requirements
 
 - [python3](https://www.python.org/)
