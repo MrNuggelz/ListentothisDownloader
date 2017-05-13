@@ -79,10 +79,18 @@ def get_song_list(month):
             return data[month]
         song_list = get_song_list_from_reddit(month)
         if song_list is not None:
+            if args.unify_genres:
+                with open('genres', encoding='utf8') as f:
+                    genre_list = [l.strip() for l in f.readlines()]
+                data = unify_genres_in_tracks(song_list, genre_list)
             data.update({month: song_list})
             save_cache(data)
         return data
     data = get_song_list_from_reddit(month)
+    if args.unify_genres:
+        with open('genres', encoding='utf8') as f:
+            genre_list = [l.strip() for l in f.readlines()]
+        data = unify_genres_in_tracks(data,genre_list)
     save_cache(dict({month: data}))
     return data
 
@@ -100,7 +108,39 @@ def get_all_song_lists_from_reddit():
 
     submissions = [x['data'] for x in json.loads(resp)['data']['children'] if
                    x['data']['subreddit_name_prefixed'] == 'r/listentothis']
-    return dict([get_tracks_for_month(month) for month in submissions])
+    months = [get_tracks_for_month(month) for month in submissions]
+    if args.unify_genres:
+        with open('genres', encoding='utf8') as f:
+            genre_list = [l.strip() for l in f.readlines()]
+        months = [(month,unify_genres_in_tracks(tracks,genre_list)) for month, tracks in months]
+    return dict(months)
+
+
+def unify_genres_in_tracks(tracks,genre_list):
+    def check_genre(s1: str, s2: str):
+        if s1[0].upper() != s2[0].upper():
+            return False
+        s1 = s1.upper().replace(' ', '').replace('-', '')
+        s2 = s2.upper().replace(' ', '').replace('-', '')
+        return s1 == s2
+
+    def unify_genre(track):
+        changed = False
+        genres = track.genre.split('\x00')
+        ugenres = []
+        for genre in genres:
+            if genre not in genre_list:
+                la = list(filter(lambda s: check_genre(s, genre), genre_list))
+                if len(la) > 0:
+                    changed = True
+                    print('changing', genre, 'to', la[0])
+                    genre = la[0]
+            ugenres.append(genre)
+        if changed:
+            track = track._replace(genre='\x00'.join(ugenres))
+        return track
+
+    return [unify_genre(track) for track in tracks]
 
 
 def check_missing_in_dir(month):
@@ -146,7 +186,7 @@ def download(track):
     try:
         dwn_url = ydl.extract_info(track.url, download=False)['url']
         urllib.request.urlretrieve(dwn_url, 'temp')
-        cmd = 'ffmpeg -v 0 -y -i file:temp -vn -acodec libmp3lame -b:a 192k file:temp.mp3'
+        cmd = ['ffmpeg','-v','0','-y','-i','file:temp','-vn','-acodec','libmp3lame','-b:a','192k','file:temp.mp3']
         if args.verbose:
             print(' finished download')
         subprocess.run(cmd)
@@ -225,6 +265,7 @@ if __name__ == '__main__':
     parser.add_argument('-r', '--reload-songs', action='store_true')
     parser.add_argument('-dc', '--disable-cache', action='store_true')
     parser.add_argument('-uc', '--update-cache', action='store_true')
+    parser.add_argument('-ug', '--unify-genres', action='store_true')
     args = parser.parse_args()
 
     if args.update_cache:
