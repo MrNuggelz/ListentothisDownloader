@@ -20,7 +20,7 @@ Track = namedtuple('Track', ['url', 'artist', 'title', 'genre', 'year', 'month']
 comment_url = 'https://www.reddit.com/user/l2tbot/comments.json?limit=1000'
 header = {"User-Agent": "l2tbotpy"}
 track_regex = re.compile(
-    r'<tr>\n<td align=\"left\"><a href=\"(?P<url>.+?)\">(?P<artist>.+?) (?:--|-) (?P<title>.+?)(?: ?\[(?P<genre>.+?)\]| ?\((?P<year>\d+)\))+')
+    r'<tr>\n<td align=\"left\"><a href=\"(?P<url>.+?)\">(?P<artist>.+?) (?:--|-) (?P<title>[^\[]+?)(?: ?\[(?P<genre>.*?[a-zA-Z]+?.*?)\]| ?[\(|\[](?P<year>[0-9 ]+)[\)|\]])+')
 
 ydl = youtube_dl.YoutubeDL({
     'noplaylist': True,
