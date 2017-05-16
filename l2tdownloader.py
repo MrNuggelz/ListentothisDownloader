@@ -19,8 +19,9 @@ from youtube_dl.utils import DownloadError
 Track = namedtuple('Track', ['url', 'artist', 'title', 'genre', 'year', 'month'])
 comment_url = 'https://www.reddit.com/user/l2tbot/comments.json?limit=1000'
 header = {"User-Agent": "l2tbotpy"}
-track_regex = re.compile(
-    r'<tr>\n<td align=\"left\"><a href=\"(?P<url>.+?)\">(?P<artist>.+?) (?:--|-) (?P<title>[^\[]+?)(?: ?\[(?P<genre>.*?[a-zA-Z]+?.*?)\]| ?[\(|\[](?P<year>[0-9 ]+)[\)|\]])+')
+first_regex = re.compile(r'<tr>\n<td align=\"left\"><a href=\"(?P<url>.+?)\">(?P<rest>.*)?</a>')
+second_regex = re.compile(
+    r'(?P<artist>.+?) (?:--|-|—) (?P<title>[^\[]+?)(?: ?\[(?P<genre>.*?[a-zA-Z]+?.*?)\]| ?[\(|\[](?P<year>[0-9 ]+)[\)|\]])+.*')
 
 ydl = youtube_dl.YoutubeDL({
     'noplaylist': True,
@@ -38,22 +39,34 @@ ydl = youtube_dl.YoutubeDL({
 })
 
 
+def track_matches(match: re.match):
+    info = match.groupdict()
+    match = second_regex.match(info['rest'])
+    return match is not None
+
+
 def track_from_match(match: re.match, month: str) -> Track:
+    info = match.groupdict()
+    url = info['url']
+    match = second_regex.match(info['rest'])
     info = match.groupdict()
     year = ''
     genre = []
     if 'year' in info:
         year = info['year']
     if 'genre' in info:
-        genre = "\x00".join([genre.strip() for genre in re.split(',|/',info['genre'])])
-    return Track(info['url'], info['artist'], info['title'],
+        try:
+            genre = "\x00".join([genre.strip() for genre in re.split(',|/', info['genre'])])
+        except TypeError:
+            print(info)
+    return Track(url, info['artist'], info['title'],
                  genre, year, month)
 
 
 def get_song_list_from_reddit(month):
     def get_tracks_html(submission):
         return [track_from_match(match, month) for match in
-                track_regex.finditer(html.unescape(html.unescape(submission['body_html'])))]
+                first_regex.finditer(html.unescape(html.unescape(submission['body_html']))) if track_matches(match)]
 
     req = urllib.request.Request(comment_url, headers=header)
     resp = urllib.request.urlopen(req).read().decode('utf-8')
@@ -90,7 +103,7 @@ def get_song_list(month):
     if args.unify_genres:
         with open('genres', encoding='utf8') as f:
             genre_list = [l.strip() for l in f.readlines()]
-        data = unify_genres_in_tracks(data,genre_list)
+        data = unify_genres_in_tracks(data, genre_list)
     save_cache(dict({month: data}))
     return data
 
@@ -101,7 +114,8 @@ def get_all_song_lists_from_reddit():
         m = regex.match(submission['link_title'])
         month = m.group(1) + m.group(2)
         return month, [track_from_match(match, month) for match in
-                       track_regex.finditer(html.unescape(html.unescape(submission['body_html'])))]
+                       first_regex.finditer(html.unescape(html.unescape(submission['body_html']))) if
+                       track_matches(match)]
 
     req = urllib.request.Request(comment_url, headers=header)
     resp = urllib.request.urlopen(req).read().decode('utf-8')
@@ -112,11 +126,11 @@ def get_all_song_lists_from_reddit():
     if args.unify_genres:
         with open('genres', encoding='utf8') as f:
             genre_list = [l.strip() for l in f.readlines()]
-        months = [(month,unify_genres_in_tracks(tracks,genre_list)) for month, tracks in months]
+        months = [(month, unify_genres_in_tracks(tracks, genre_list)) for month, tracks in months]
     return dict(months)
 
 
-def unify_genres_in_tracks(tracks,genre_list):
+def unify_genres_in_tracks(tracks, genre_list):
     def check_genre(s1: str, s2: str):
         if s1[0].upper() != s2[0].upper():
             return False
@@ -176,7 +190,7 @@ def download(track):
     if track is None:
         return
     filename = '{0!s} - {1!s}'.format(track.artist, track.title)
-    filename = filename.replace('/', '').replace('?', '').replace('\"','\'').replace(':',';').replace('*','')
+    filename = filename.replace('/', '').replace('?', '').replace('\"', '\'').replace(':', ';').replace('*', '')
     if not args.reload_songs and song_exists(track):
         if args.verbose:
             print('skipping existing:', filename)
@@ -186,7 +200,8 @@ def download(track):
     try:
         dwn_url = ydl.extract_info(track.url, download=False)['url']
         urllib.request.urlretrieve(dwn_url, 'temp')
-        cmd = ['ffmpeg','-v','0','-y','-i','file:temp','-vn','-acodec','libmp3lame','-b:a','192k','file:temp.mp3']
+        cmd = ['ffmpeg', '-v', '0', '-y', '-i', 'file:temp', '-vn', '-acodec', 'libmp3lame', '-b:a', '192k',
+               'file:temp.mp3']
         if args.verbose:
             print(' finished download')
         subprocess.run(cmd)
